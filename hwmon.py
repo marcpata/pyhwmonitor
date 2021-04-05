@@ -4,6 +4,13 @@ from time import sleep
 from lib.getserial import listEBBports,serial
 from infi.systray import SysTrayIcon
 from subprocess import Popen
+from typing import Optional
+from ctypes import wintypes, windll, create_unicode_buffer, c_ulong,byref
+from lib.ledble import ledBle
+import json
+import psutil
+import os
+
 def donothing(systray):
     pass
 
@@ -28,8 +35,22 @@ def connect_arduino():
         except:
             print("Error puerto!")
 
+def getExeName() -> Optional[str]:
+    hWnd = windll.user32.GetForegroundWindow()
+    pid = c_ulong()
+    result = windll.user32.GetWindowThreadProcessId(hWnd, byref(pid))
+    return psutil.Process(pid.value).name()
 
-    
+colorjson = os.getenv('appdata') + '\\dlprofiler\\appcolors.json'
+with open(colorjson) as jsondata:
+    list_progs = json.load(jsondata)
+def_color = (list(filter(lambda x:x['titulo']=='Default',list_progs['apps'])))[0]["color"]
+def getColorApp(app_exe):
+    ret_color = (list(filter(lambda x:app_exe in x['path'],list_progs['apps'])))
+    if(ret_color):
+        return ret_color[0]['color']
+    else:
+        return def_color
 
 def initialize_openhardwaremonitor():
     file = r'OpenHardwareMonitorLib'
@@ -172,39 +193,44 @@ if __name__ == "__main__":
     #fetch_stats(HardwareHandle)
     arduino=connect_arduino()
     ejecutar = True
+
     def Salir(sysTrayIcon):
         global ejecutar
         ejecutar = False
 
-    def Nada(sysTrayIcon):
-        print('nada')
-
     def reiniciarLed(systray):
-        posh = [
-            'powershell.exe',
-            R'$callback=(ssh 192.168.1.222 . \Users\marcp\Desktop\Servled.ps1)'
-        ]
-        proc = Popen(posh, shell=True,
-            stdin=None, stdout=None, stderr=None, close_fds=True)
-        print('reinciar')
+        # posh = [
+        #     'powershell.exe',
+        #     R'$callback=(ssh 192.168.1.222 . \Users\marcp\Desktop\Servled.ps1)'
+        # ]
+        # proc = Popen(posh, shell=True,
+        #     stdin=None, stdout=None, stderr=None, close_fds=True)
+        # print('reinciar')
+        ledble.connect_ble()
 
     def apagarLed(systray):
-        posh = [
+        """ posh = [
             'powershell.exe',
             R'$callback=(wget -Uri "192.168.1.222:3100/switch/off")'
         ]
         proc = Popen(posh, shell=True,
             stdin=None, stdout=None, stderr=None, close_fds=True)
-        print('apagar')
+        print('apagar') """
+        ledble.set_state('off')
+        global mon_apps
+        mon_apps = False
 
     def encenderLed(systray):
-        posh = [
+        """ posh = [
             'powershell.exe',
             R'$callback=(wget -Uri "192.168.1.222:3100/switch/on")'
         ]
         proc = Popen(posh, shell=True,
             stdin=None, stdout=None, stderr=None, close_fds=True)
-        print('encender')
+        print('encender') """
+        global mon_apps
+        mon_apps=True
+        ledble.set_state('on')
 
     hover_text = 'MCO-CPU Display'
     
@@ -223,11 +249,20 @@ if __name__ == "__main__":
     systray = SysTrayIcon("pyhw.ico", hover_text, menu_items, on_quit=Salir, default_menu_index=1)
     systray.QUIT='Salir'
     systray.start()
+    ledble = ledBle()
+    ledble.connect_ble()
+    encenderLed(systray)
 
     if(arduino):
             while(ejecutar):
+                if(mon_apps):
+                    act_exe = getExeName()                
+                    send_color = getColorApp(act_exe)
+                    ledble.set_color(send_color)
                 update_arduino(HardwareHandle,arduino)
                 sleep(2)
             arduino.close()
-
+            
+    ledble.set_state('off')
+    ledble.disconnect_ble()
     systray.shutdown()

@@ -1,15 +1,16 @@
 import clr #package pythonnet, not clr
 import sys
 from time import sleep
-from lib.getserial import listEBBports,serial
+from libs.getserial import listEBBports,serial
 from infi.systray import SysTrayIcon
 from subprocess import Popen
 from typing import Optional
 from ctypes import wintypes, windll, create_unicode_buffer, c_ulong,byref
-from lib.ledble import ledBle
+from libs.ledble import ledBle
 import json
 import psutil
 import os
+import atexit
 
 def donothing(systray):
     pass
@@ -39,7 +40,10 @@ def getExeName() -> Optional[str]:
     hWnd = windll.user32.GetForegroundWindow()
     pid = c_ulong()
     result = windll.user32.GetWindowThreadProcessId(hWnd, byref(pid))
-    return psutil.Process(pid.value).name()
+    length = windll.user32.GetWindowTextLengthW(hWnd)
+    titulo = create_unicode_buffer(length + 1)
+    windll.user32.GetWindowTextW(hWnd, titulo, length + 1) 
+    return psutil.Process(pid.value).name(), titulo
 
 colorjson = os.getenv('appdata') + '\\dlprofiler\\appcolors.json'
 with open(colorjson) as jsondata:
@@ -167,7 +171,7 @@ def parse_sensor(sensor):
                 sensor.Hardware.HardwareType == hardwaretypes.index('GpuNvidia') and\
                 u'core' in sensor.Name.lower():
                 origin = 'gpuclock'
-                value = "%i" % sensor.Value                
+                value = "%i" % sensor.Value
                 #print(f'HT: {sensor.Hardware.HardwareType} name: {sensor.Name} valor: {sensor.Value}')
             return (origin, value)
 
@@ -194,11 +198,12 @@ if __name__ == "__main__":
     arduino=connect_arduino()
     ejecutar = True
 
+    @atexit.register
     def Salir(sysTrayIcon):
         global ejecutar
         ejecutar = False
 
-    def reiniciarLed(systray):
+    def blackDefault(systray):
         # posh = [
         #     'powershell.exe',
         #     R'$callback=(ssh 192.168.1.222 . \Users\marcp\Desktop\Servled.ps1)'
@@ -206,7 +211,13 @@ if __name__ == "__main__":
         # proc = Popen(posh, shell=True,
         #     stdin=None, stdout=None, stderr=None, close_fds=True)
         # print('reinciar')
-        ledble.connect_ble()
+        #ledble.connect_ble()
+        global def_color
+        def_color='#000000'
+
+    def originDefault(systray):
+        global def_color
+        def_color = (list(filter(lambda x:x['titulo']=='Default',list_progs['apps'])))[0]["color"]
 
     def apagarLed(systray):
         """ posh = [
@@ -240,7 +251,8 @@ if __name__ == "__main__":
         #('Dispositivos bluetooth',None,donothing)
         ('Dispositivos Bluetooth',None,(('Ninguno', None,donothing),)),
         ('LED Escritorio', None, (
-            ('Reinciar servicio',None,reiniciarLed),
+            ('Color Negro Default',None,blackDefault),
+            ('Color Default',None,originDefault),
             ('Encender LED Escritorio',None,encenderLed),
             ('Apagar LED Escritorio',None,apagarLed),
         )),
@@ -256,9 +268,12 @@ if __name__ == "__main__":
     if(arduino):
             while(ejecutar):
                 if(mon_apps):
-                    act_exe = getExeName()                
+                    act_exe, eltitulo = getExeName()                
                     send_color = getColorApp(act_exe)
-                    ledble.set_color(send_color)
+                    if('Skype[' in eltitulo):
+                        ledble.set_effect('28','01')
+                    else:
+                        ledble.set_color(send_color)
                 update_arduino(HardwareHandle,arduino)
                 sleep(2)
             arduino.close()

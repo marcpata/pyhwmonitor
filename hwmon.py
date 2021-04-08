@@ -5,12 +5,13 @@ from libs.getserial import listEBBports,serial
 from infi.systray import SysTrayIcon
 from subprocess import Popen
 from typing import Optional
-from ctypes import wintypes, windll, create_unicode_buffer, c_ulong,byref
+from ctypes import wintypes, windll, create_unicode_buffer, c_ulong,byref, \
+    WINFUNCTYPE, c_bool, c_int, POINTER
+#from ctypes import *
 from libs.ledble import ledBle
 import json
 import psutil
-import os
-import atexit
+import os,atexit
 
 def donothing(systray):
     pass
@@ -19,6 +20,44 @@ def donothing(systray):
 debug = False
 openhardwaremonitor_hwtypes = ['Mainboard','SuperIO','CPU','RAM','GpuNvidia','GpuAti','TBalancer','Heatmaster','HDD']
 openhardwaremonitor_sensortypes = ['Voltage','Clock','Temperature','Load','Fan','Flow','Control','Level','Factor','Power','Data','SmallData']
+
+def getExeName() -> Optional[str]:
+    hWnd = windll.user32.GetForegroundWindow()
+    pid = c_ulong()
+    result = windll.user32.GetWindowThreadProcessId(hWnd, byref(pid))
+    return psutil.Process(pid.value).name()
+
+colorjson = os.getenv('appdata') + '\\dlprofiler\\appcolors.json'
+with open(colorjson) as jsondata:
+    list_progs = json.load(jsondata)
+def_color = (list(filter(lambda x:x['titulo']=='Default',list_progs['apps'])))[0]["color"]
+def getColorApp(app_exe):
+    ret_color = (list(filter(lambda x:app_exe in x['path'],list_progs['apps'])))
+    if(ret_color):
+        return ret_color[0]['color']
+    else:
+        return def_color
+
+def detectForgroundWindows():
+    #Stolen fom https://sjohannes.wordpress.com/2012/03/23/win32-python-getting-all-window-titles/
+    EnumWindows = windll.user32.EnumWindows
+    EnumWindowsProc = WINFUNCTYPE(c_bool, POINTER(c_int), POINTER(c_int))
+    GetWindowText = windll.user32.GetWindowTextW
+    GetWindowTextLength = windll.user32.GetWindowTextLengthW
+    IsWindowVisible = windll.user32.IsWindowVisible
+ 
+    titles = []
+    def foreach_window(hwnd, lParam):
+        if IsWindowVisible(hwnd):
+            length = GetWindowTextLength(hwnd)
+            buff = create_unicode_buffer(length + 1)
+            GetWindowText(hwnd, buff, length + 1)
+            titles.append(buff.value)
+        return True
+ 
+    EnumWindows(EnumWindowsProc(foreach_window), 0)
+      
+    return titles
 
 def connect_arduino():
     a_ports = list(listEBBports())
@@ -36,25 +75,6 @@ def connect_arduino():
         except:
             print("Error puerto!")
 
-def getExeName() -> Optional[str]:
-    hWnd = windll.user32.GetForegroundWindow()
-    pid = c_ulong()
-    result = windll.user32.GetWindowThreadProcessId(hWnd, byref(pid))
-    length = windll.user32.GetWindowTextLengthW(hWnd)
-    titulo = create_unicode_buffer(length + 1)
-    windll.user32.GetWindowTextW(hWnd, titulo, length + 1) 
-    return psutil.Process(pid.value).name(), titulo
-
-colorjson = os.getenv('appdata') + '\\dlprofiler\\appcolors.json'
-with open(colorjson) as jsondata:
-    list_progs = json.load(jsondata)
-def_color = (list(filter(lambda x:x['titulo']=='Default',list_progs['apps'])))[0]["color"]
-def getColorApp(app_exe):
-    ret_color = (list(filter(lambda x:app_exe in x['path'],list_progs['apps'])))
-    if(ret_color):
-        return ret_color[0]['color']
-    else:
-        return def_color
 
 def initialize_openhardwaremonitor():
     file = r'OpenHardwareMonitorLib'
@@ -191,6 +211,10 @@ if __name__ == "__main__":
         if (sys.argv[1]=='--debug'):
             print('modo debug ON')
             debug =True
+
+    hWnd = windll.kernel32.GetConsoleWindow()
+    if hWnd:
+        windll.user32.ShowWindow(hWnd, 0)
     #listEBBports()
     #print("Ejecutando...")
     HardwareHandle = initialize_openhardwaremonitor()
@@ -199,6 +223,12 @@ if __name__ == "__main__":
     ejecutar = True
 
     @atexit.register
+    def exitF():
+        global ejecutar
+        ejecutar=False
+        ledble.set_state('off')
+        ledble.disconnect_ble()
+
     def Salir(sysTrayIcon):
         global ejecutar
         ejecutar = False
@@ -268,16 +298,18 @@ if __name__ == "__main__":
     if(arduino):
             while(ejecutar):
                 if(mon_apps):
-                    act_exe, eltitulo = getExeName()                
-                    send_color = getColorApp(act_exe)
-                    if('Skype[' in eltitulo):
+                    act_exe = getExeName()
+                    send_color = getColorApp(act_exe)                    
+                    progs = detectForgroundWindows()
+                    existe_skype = [True if 'Skype [' in titulo else False for titulo in progs]
+                    if(True in existe_skype):
                         ledble.set_effect('28','01')
                     else:
                         ledble.set_color(send_color)
+
                 update_arduino(HardwareHandle,arduino)
                 sleep(2)
             arduino.close()
-            
-    ledble.set_state('off')
-    ledble.disconnect_ble()
+
+    exitF()
     systray.shutdown()
